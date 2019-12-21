@@ -13,8 +13,8 @@ int itmax = 100;
 int i,j,k;
 double eps;
 int it;
-double **A, **B;
-int Nprocs = 1;
+double **A, **B; // матрицы
+int Nprocs = 1; // количество процессов
 int LeftCol, RightCol; // обрабатываем [LeftCol, RightCol) строки
 int TagLeft = 10, TagRight = 11, Rank;
 int BASE; // смещение для пересчета теоретического номера 
@@ -44,6 +44,8 @@ int main(int an, char **as)
 	BASE = LeftCol - 2;
 	RightCol = LeftCol + M;
 	if (Rank == Nprocs - 1) {
+		// на случай, если количество строк матрицы не делится на количество
+		// решающих задачу процессов
 		RightCol = N;
 	}
 	A = malloc(sizeof(*A) * (M + 5));

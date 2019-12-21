@@ -23,8 +23,6 @@ int main(int an, char **as)
 #ifndef _OPENMP
 	#error No OpenMP.
 #endif
-
-	double time = omp_get_wtime();
 	omp_set_num_threads(atoi(as[1]));
 	N = atoi(as[2]) + 2;
 	A = malloc(sizeof(*A) * N);
@@ -33,6 +31,8 @@ int main(int an, char **as)
 		A[i] = malloc(sizeof(*A) * N);
 		B[i] = malloc(sizeof(*B) * N);
 	}
+
+	double time = omp_get_wtime();
 
 	init();
 	for(it=1; it<=itmax; it++)
