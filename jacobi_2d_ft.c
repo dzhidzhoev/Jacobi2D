@@ -263,7 +263,7 @@ save_checkpoint(double **mat)
         }
 
         fwrite(&eps, sizeof(eps), 1, f);
-        fwrite(&mat[i - BASE], sizeof[i - BASE][0], N, f);
+        fwrite(mat[i - BASE], sizeof(mat[i - BASE][0]), N, f);
 
         if (fclose(f))
         {
@@ -288,7 +288,7 @@ load_checkpoint(int it, double **mat)
         }
 
         fread(&eps, sizeof(eps), 1, f);
-        fread(&mat[i - BASE], sizeof[i - BASE][0], N, f);
+        fread(mat[i - BASE], sizeof(mat[i - BASE][0]), N, f);
 
         if (fclose(f))
         {
