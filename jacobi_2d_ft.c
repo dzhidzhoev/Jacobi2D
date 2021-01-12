@@ -48,7 +48,7 @@ MPI_Elect_leader(MPI_Comm comm, int *alive_count_output, int **alive_ranks_outpu
 {
     int comm_size = current_size, rank = current_rank;
 
-    MPI_Barrier(comm);
+//    MPI_Barrier(comm);
 
     // устанавливаем обработчик, игнорирующий ошибки
     MPI_Errhandler old_errhandler = NULL;
@@ -71,16 +71,15 @@ MPI_Elect_leader(MPI_Comm comm, int *alive_count_output, int **alive_ranks_outpu
     while (prev >= 0)
     {
         MPI_Status status;
-        printf("%d trying to receive count from %d\n", current_rank, prev);
+//        printf("%d trying to receive count from %d\n", current_rank, prev);
         if (MPI_Recv(&alive_count, 1, MPI_INT, prev, ALIVE_COUNT_TAG, comm, &status) 
                 == MPI_SUCCESS)
         {
-            printf("trying to receive list from %d ac %d\n", prev, alive_count);
+//            printf("trying to receive list from %d ac %d\n", prev, alive_count);
             alive_ranks = realloc(alive_ranks, sizeof(*alive_ranks) * alive_count);
             if (MPI_Recv(alive_ranks, alive_count, MPI_INT, prev, ALIVE_RANKS_TAG, comm, &status)
                     == MPI_SUCCESS)
             {
-                printf("rcvd\n");
                 break;
             }
             else
@@ -90,7 +89,7 @@ MPI_Elect_leader(MPI_Comm comm, int *alive_count_output, int **alive_ranks_outpu
         }
         --prev;
     }
-    printf("prevs found %d\n", current_rank);
+//    printf("prevs found %d\n", current_rank);
     // добавляем текущий процесс в список живых
     ++alive_count;
     alive_ranks = realloc(alive_ranks, sizeof(*alive_ranks) * alive_count);
@@ -100,10 +99,10 @@ MPI_Elect_leader(MPI_Comm comm, int *alive_count_output, int **alive_ranks_outpu
     bool is_leader = true;
     while (next < comm_size)
     {
-        printf("send count to %d\n", next);
+//        printf("send count to %d\n", next);
         if (MPI_Send(&alive_count, 1, MPI_INT, next, ALIVE_COUNT_TAG, comm) == MPI_SUCCESS)
         {
-            printf("send list to %d ac %d\n", next, alive_count);
+//            printf("send list to %d ac %d\n", next, alive_count);
             if (MPI_Send(alive_ranks, alive_count, MPI_INT, next, ALIVE_RANKS_TAG, comm) 
                     == MPI_SUCCESS)
             {
@@ -186,6 +185,7 @@ void
 found_error()
 {
     MPIX_Comm_revoke(current_comm);
+    printf("revoked\n");
 
     MPI_Comm next_comm = MPI_COMM_NULL;
     MPIX_Comm_shrink(current_comm, &next_comm);
@@ -255,18 +255,15 @@ save_checkpoint(double **mat)
     {
         char buf[512];
         sprintf(buf, "%d_%d.txt", it, i);
-        FILE *f = fopen(buf, "w");
+        FILE *f = fopen(buf, "wb");
         if (!f)
         {
             fprintf(stderr, "failed to save backup %d!\n", i);
             found_error();
         }
 
-        fprintf(f, "%f\n", eps);
-        for(int j=0; j<=N-1; j++)
-        {
-            fprintf(f, "%f\n", mat[i - BASE][j]);
-        }
+        fwrite(&eps, sizeof(eps), 1, f);
+        fwrite(&mat[i - BASE], sizeof[i - BASE][0], N, f);
 
         if (fclose(f))
         {
@@ -279,23 +276,19 @@ save_checkpoint(double **mat)
 void
 load_checkpoint(int it, double **mat)
 {
-    it = -1;
     for (int i = LeftCol; i < RightCol; ++i)
     {
-        char buf[512];
+        char buf[512] = {};
         sprintf(buf, "%d_%d.txt", it, i);
-        FILE *f = fopen(buf, "r");
+        FILE *f = fopen(buf, "rb");
         if (!f)
         {
-            fprintf(stderr, "failed to load backup %d!\n", i);
+            fprintf(stderr, "failed to open backup %s %d!\n", buf, i);
             found_error();
         }
 
-        fscanf(f, "%lf\n", &eps);
-        for(int j=0; j<=N-1; j++)
-        {
-            fscanf(f, "%lf\n", &mat[i - BASE][j]);
-        }
+        fread(&eps, sizeof(eps), 1, f);
+        fread(&mat[i - BASE], sizeof[i - BASE][0], N, f);
 
         if (fclose(f))
         {
@@ -351,6 +344,7 @@ find_and_load_checkpoint()
     {
         it = lower;
     }
+    printf("local checkpoint suggestion made %d %d\n", current_rank, it);
     int global_it;
     if (MPI_Allreduce(&it, &global_it, 1, MPI_INT, MPI_MIN, current_comm) != MPI_SUCCESS)
     {
@@ -358,6 +352,10 @@ find_and_load_checkpoint()
         found_error();
     }
     it = global_it;
+    if (!current_rank)
+    {
+        printf("restored at checkpoint %d\n", it);
+    }
 
     if (it >= 0)
     {
@@ -373,8 +371,16 @@ void verify();
 static void
 restart_checkpoint()
 {
+    MPI_Barrier(current_comm);
+    printf("restart_checkpoint\n");
     find_current_task();
     find_and_load_checkpoint();
+    printf("checkpoint loaded %d\n", current_rank);
+    MPI_Barrier(current_comm);
+    if (!current_rank)
+    {
+        printf("everyone have loaded checkpoint\n");
+    }
 
     if (it < 0)
     {
@@ -390,20 +396,20 @@ restart_checkpoint()
         double geps;
         eps = 0.;
 		if (MPI_Sendrecv(&A[LeftCol - BASE][0], N, MPI_DOUBLE_PRECISION, LeftRank, TagLeft, &A[RightCol - BASE][0], N, MPI_DOUBLE_PRECISION,
-			RightRank, TagLeft, MPI_COMM_WORLD, &s) != MPI_SUCCESS)
+			RightRank, TagLeft, current_comm, &s) != MPI_SUCCESS)
         {
             fprintf(stderr, "unable to exchange with left\n");
             found_error();
         }
 		if (MPI_Sendrecv(&A[RightCol - 1 - BASE][0], N, MPI_DOUBLE_PRECISION, RightRank, TagRight, &A[LeftCol - 1 - BASE][0], N, MPI_DOUBLE_PRECISION,
-			LeftRank, TagRight, MPI_COMM_WORLD, &s) != MPI_SUCCESS)
+			LeftRank, TagRight, current_comm, &s) != MPI_SUCCESS)
         {
             fprintf(stderr, "unable to exchange with right\n");
             found_error();
         }
 		relax();
 		resid();
-		if (MPI_Allreduce(&eps, &geps, 1, MPI_DOUBLE_PRECISION, MPI_MAX, MPI_COMM_WORLD) != MPI_SUCCESS) {
+		if (MPI_Allreduce(&eps, &geps, 1, MPI_DOUBLE_PRECISION, MPI_MAX, current_comm) != MPI_SUCCESS) {
 			fprintf(stderr, "Failed to reduce it %d\n", it);
             found_error();
 		}
@@ -426,13 +432,13 @@ restart_checkpoint()
     }
 
 	if (MPI_Sendrecv(&A[LeftCol - BASE][0], N, MPI_DOUBLE_PRECISION, LeftRank, TagLeft, &A[RightCol - BASE][0], N, MPI_DOUBLE_PRECISION,
-		RightRank, TagLeft, MPI_COMM_WORLD, &s) != MPI_SUCCESS)
+		RightRank, TagLeft, current_comm, &s) != MPI_SUCCESS)
     {
         fprintf(stderr, "unable to exchange with left\n");
         found_error();
     }
 	if (MPI_Sendrecv(&A[RightCol - 1 - BASE][0], N, MPI_DOUBLE_PRECISION, RightRank, TagRight, &A[LeftCol - 1 - BASE][0], N, MPI_DOUBLE_PRECISION,
-		LeftRank, TagRight, MPI_COMM_WORLD, &s) != MPI_SUCCESS)
+		LeftRank, TagRight, current_comm, &s) != MPI_SUCCESS)
     {
         fprintf(stderr, "unable to exchange with right\n");
         found_error();
@@ -488,7 +494,7 @@ void verify()
 	{
 		s=s+A[i - BASE][j]*(i+1)*(j+1)/(N*N);
 	}
-	if (MPI_Allreduce(&s, &gs, 1, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD)
+	if (MPI_Allreduce(&s, &gs, 1, MPI_DOUBLE_PRECISION, MPI_SUM, current_comm)
             != MPI_SUCCESS)
     {
         fprintf(stderr, "failed to exchange S\n");
@@ -523,7 +529,7 @@ main(int an, char **as)
 		fprintf(stderr, "failed to get current process rank\n");
 		exit(1);
     }    
-    srand(time(0) + 1000 * current_rank);
+    srand(time(0) + 511 * current_rank);
 
     found_error();
         
