@@ -1,4 +1,6 @@
 #include <mpi.h>
+#include <mpi.h>
+#include <time.h>
 #include <signal.h>
 #include <unistd.h>
 #include <stdbool.h>
@@ -18,6 +20,8 @@ ignore_mpi_error(MPI_Comm *comm, int *code, ...)
 
 static MPI_Errhandler MPI_IGNORE_ERROR;
 
+static MPI_Comm current_comm = MPI_COMM_WORLD;
+
 static int leader_rank;
 static int alive_count;
 static int *alive_ranks;
@@ -32,17 +36,20 @@ void finalize_success()
     exit(0);
 }
 
+static void 
+setup_handlers(MPI_Comm comm)
+{
+    MPI_Comm_set_errhandler(comm, MPI_ERRORS_RETURN);
+}
+
 static int
 MPI_Elect_leader(MPI_Comm comm, int *alive_count_output, int **alive_ranks_output)
 {
     int comm_size, rank;
-    // дожидаемся, пока все процессы в группе начнут выборы лидера
-    if (MPI_Barrier(comm) != MPI_SUCCESS)
-    {
-		fprintf(stderr, "failed to reach barrier\n");
-		exit(1);
-    }
-    
+
+    printf("%d starting election\n", current_rank);
+    MPI_Barrier(comm);
+
     // устанавливаем обработчик, игнорирующий ошибки
     MPI_Errhandler old_errhandler = NULL;
     if (MPI_Comm_get_errhandler(comm, &old_errhandler) != MPI_SUCCESS)
@@ -62,7 +69,7 @@ MPI_Elect_leader(MPI_Comm comm, int *alive_count_output, int **alive_ranks_outpu
 		fprintf(stderr, "failed to get communicator size or rank\n");
 		exit(1);
     }
-    printf("handlers has been set!\n");
+
     int alive_count = 0;
     int *alive_ranks = NULL;
     int prev = rank - 1;
@@ -70,7 +77,7 @@ MPI_Elect_leader(MPI_Comm comm, int *alive_count_output, int **alive_ranks_outpu
     while (prev >= 0)
     {
         MPI_Status status;
-        printf("trying to receive count from %d\n", prev);
+        printf("%d trying to receive count from %d\n", current_rank, prev);
         if (MPI_Recv(&alive_count, 1, MPI_INT, prev, ALIVE_COUNT_TAG, comm, &status) 
                 == MPI_SUCCESS)
         {
@@ -184,7 +191,15 @@ MPI_Elect_leader(MPI_Comm comm, int *alive_count_output, int **alive_ranks_outpu
 void
 found_error()
 {
-    leader_rank = MPI_Elect_leader(MPI_COMM_WORLD, &alive_count, &alive_ranks);
+    MPIX_Comm_revoke(current_comm);
+
+    MPI_Comm next_comm = MPI_COMM_NULL;
+    MPIX_Comm_shrink(current_comm, &next_comm);
+    setup_handlers(next_comm);
+    MPI_Comm_rank(next_comm, &current_rank);
+    current_comm = next_comm;
+    
+    leader_rank = MPI_Elect_leader(current_comm, &alive_count, &alive_ranks);
     restart_checkpoint();
 }
 
@@ -220,7 +235,7 @@ restart_checkpoint()
     if (current_i == 0)
     {
         if (MPI_Send(&data, 1, MPI_INT, alive_ranks[(current_i + 1) % alive_count], 
-                    DATA_TAG, MPI_COMM_WORLD) != MPI_SUCCESS)
+                    DATA_TAG, current_comm) != MPI_SUCCESS)
         {
             fprintf(stderr, "unable to send data\n");
             found_error();
@@ -231,7 +246,7 @@ restart_checkpoint()
     {
         MPI_Status status;
         if (MPI_Recv(&data, 1, MPI_INT, alive_ranks[(current_i - 1 + alive_count) % alive_count],
-                    DATA_TAG, MPI_COMM_WORLD, &status) != MPI_SUCCESS)
+                    DATA_TAG, current_comm, &status) != MPI_SUCCESS)
         {
             fprintf(stderr, "unable to recv data\n");
             found_error();
@@ -239,12 +254,13 @@ restart_checkpoint()
         printf("process %d recv %d\n", current_rank, data);
         ++data;
         // процесс может упасть
-        if (rand() % 100 < 30)
+        if (rand() % 1000 < 15)
         {
+            printf("suicide %d!!!\n", current_rank);
             exit(1);
         }
         if (MPI_Send(&data, 1, MPI_INT, alive_ranks[(current_i + 1) % alive_count], 
-                    DATA_TAG, MPI_COMM_WORLD) != MPI_SUCCESS)
+                    DATA_TAG, current_comm) != MPI_SUCCESS)
         {
             fprintf(stderr, "unable to send data\n");
             found_error();
@@ -258,20 +274,24 @@ restart_checkpoint()
 int 
 main(int an, char **as)
 {
+    srand(time(0));
+
     if (MPI_Init(&an, &as) != MPI_SUCCESS) 
     {
 		fprintf(stderr, "failed to init MPI\n");
 		exit(1);
 	}
-    
+
     if (MPI_SUCCESS != MPI_Comm_create_errhandler(ignore_mpi_error, &MPI_IGNORE_ERROR))
     {
 		fprintf(stderr, "failed create ignoring error handler\n");
 		exit(1);
     }
-    MPI_Comm_set_errhandler(MPI_COMM_WORLD, MPI_ERRORS_RETURN);
 
-    if (MPI_Comm_rank(MPI_COMM_WORLD, &current_rank) != MPI_SUCCESS)
+    MPI_Comm_dup(current_comm, &current_comm);
+    setup_handlers(current_comm);
+    
+    if (MPI_Comm_rank(current_comm, &current_rank) != MPI_SUCCESS)
     {
 		fprintf(stderr, "failed to get current process rank\n");
 		exit(1);
